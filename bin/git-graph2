@@ -164,6 +164,14 @@ package My::Git::Graph2 {
 
         has gitLogOptions          => (is => 'rw', default => sub { return []; });
 
+        # state
+        has columnOccupiedStatus   => (is => 'rw', default => sub { return []; }); # column recycling
+        has columnFreeingCountdown => (is => 'rw', default => sub { return []; }); # column recycling
+        has contextLineCount       => (is => 'rw', default => 0);                  # compactification
+        has contextPrintQueue      => (is => 'rw', default => sub { return []; }); # compactification
+        has contextIndex           => (is => 'rw', default => 0);                  # compactification
+        has contextLastIndex       => (is => 'rw', default => 0);                  # compactification
+
         # options
         has showParents            => (is => 'rw', default => 0);
         has padding                => (is => 'rw', default => 32);
@@ -173,6 +181,9 @@ package My::Git::Graph2 {
         has dryRun                 => (is => 'rw', default => 0);
         has wrapColumns            => (is => 'rw');
         has markMerges             => (is => 'rw');
+        has recycleColumns         => (is => 'rw', default => 0);
+        has compactify             => (is => 'rw', default => 0);
+        has contextLines           => (is => 'rw', default => 3);
 
         has markBranchesOff        => (is => 'rw', default => sub { return []; }); # supplied on cmdline
         has markBranchesOffCommits => (is => 'rw', default => sub { return []; }); # converted to commitids
@@ -515,6 +526,15 @@ package My::Git::Graph2 {
 
     sub getNextColumnNumber {
         my ($self) = @_;
+
+        if ($self->recycleColumns) {
+            for (my $i = 0; $i < scalar @{$self->columns}; $i += 1) {
+                if (!defined $self->columns->[$i]) {
+                    return $i;
+                }
+            }
+        }
+
         my $result = $self->nextColumnNumber;
         $self->nextColumnNumber($self->nextColumnNumber + 1);
         return $result;
@@ -766,6 +786,15 @@ package My::Git::Graph2 {
 
         my @graphLines = $self->computeGraphLines();
 
+        if ($self->compactify) {
+            $self->contextIndex($self->contextIndex + 1);
+            if (scalar @graphLines > 1 || $self->contextIndex == 1) {
+                $self->contextLineCount(0);
+            } else {
+                $self->contextLineCount($self->contextLineCount + 1);
+            }
+        }
+
         my $totalColumns;
 
         my $graphLineLength = max map { length $_ } @graphLines;
@@ -789,14 +818,46 @@ package My::Git::Graph2 {
             }
         }
 
+        my $output = '';
+
         foreach my $log (@log) {
             my $graphLine = shift(@graphLines);
             $graphLine //= $self->computeExtendedGraphLine();
-            print($graphLine . $log . "\n");
+            $output .= $graphLine . $log . "\n";
         }
 
         foreach my $graphLine (@graphLines) {
-            print($graphLine . "\n");
+            $output .= $graphLine . "\n";
+        }
+
+        if ($self->compactify) {
+            my $lines = $self->contextLines;
+            my $pq = $self->contextPrintQueue;
+            if ($self->contextLineCount <= ($lines + 1)) {
+                if (scalar @$pq) {
+                    if (($self->contextLastIndex) + 1 < $pq->[0]->{index}) {
+                        print("...\n");
+                    }
+                    foreach my $line (@$pq) {
+                        my $output = $line->{output};
+                        # my $prefix = sprintf("%6d  ", $line->{index});
+                        # $output =~ s{^}{$prefix}mg;
+                        print $output;
+                    }
+                }
+                @$pq = ();
+                # my $prefix = sprintf("%6d  ", $self->contextIndex);
+                # $output =~ s{^}{$prefix}mg;
+                print $output;
+                $self->contextLastIndex($self->contextIndex);
+            } else {
+                push(@$pq, { index => $self->contextIndex, output => $output });
+                if (scalar @$pq > $lines) {
+                    splice(@$pq, 0, scalar(@$pq) - $lines);
+                }
+            }
+        } else {
+            print $output;
         }
 
         $self->cleanupColumns();
