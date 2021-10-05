@@ -161,10 +161,6 @@ package My::Git::Graph2 {
         has commitColumnNumber     => (is => 'rw');
         has nextColumnNumber       => (is => 'rw', default => 0);
         has columnNumbers          => (is => 'rw', default => sub { return {}; });
-
-        has gitLogOptions          => (is => 'rw', default => sub { return []; });
-
-        # state
         has columnOccupiedStatus   => (is => 'rw', default => sub { return []; }); # column recycling
         has columnFreeingCountdown => (is => 'rw', default => sub { return []; }); # column recycling
         has contextLineCount       => (is => 'rw', default => 0);                  # compactification
@@ -173,6 +169,7 @@ package My::Git::Graph2 {
         has contextLastIndex       => (is => 'rw', default => 0);                  # compactification
 
         # options
+        has gitLogOptions          => (is => 'rw', default => sub { return []; });
         has showParents            => (is => 'rw', default => 0);
         has padding                => (is => 'rw', default => 32);
         has stdin                  => (is => 'rw', default => 0);
