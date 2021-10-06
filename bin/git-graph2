@@ -167,6 +167,7 @@ package My::Git::Graph2 {
         has contextPrintQueue      => (is => 'rw', default => sub { return []; }); # compactification
         has contextIndex           => (is => 'rw', default => 0);                  # compactification
         has contextLastIndex       => (is => 'rw', default => 0);                  # compactification
+        has mergesInto => (is => 'rw', default => sub { return {}; });
 
         # options
         has gitLogOptions          => (is => 'rw', default => sub { return []; });
@@ -512,10 +513,15 @@ package My::Git::Graph2 {
     sub startCommit {
         my ($self, $line, $commit, @parents) = @_;
 
+        # fork same column as merge
+        $self->computeColumnNumbersPhase0($commit, @parents);
+
+        # end of previous commit
         if (defined $self->commit) {
             $self->printCommit();
         }
 
+        # start of this commit
         $self->commitLog([$line]);
         $self->commit($commit);
         $self->parents(\@parents);
@@ -527,26 +533,102 @@ package My::Git::Graph2 {
         if ($self->recycleColumns) {
             for (my $i = 0; $i < scalar @{$self->columns}; $i += 1) {
                 if (!defined $self->columns->[$i]) {
+                    $self->columns->[$i] = { status => 'new' };
                     return $i;
                 }
             }
         }
 
-        my $result = $self->nextColumnNumber;
+        my $result = $self->nextColumnNumber();
+        $self->columns->[$result] //= { status => 'new' }; # needed?
         $self->nextColumnNumber($self->nextColumnNumber + 1);
         return $result;
+    }
+
+    sub assignColumnNumber {
+        my ($self, $commit, $columnNumber, $force) = @_;
+
+        my $convertSub = sub {
+            if (ref $columnNumber eq 'CODE') { $columnNumber = $columnNumber->(); }
+        };
+
+        my $currentColumnNumber = $self->columnNumbers->{$commit};
+        if (defined $currentColumnNumber) {
+            if ($force) {
+                $convertSub->();
+                if ($currentColumnNumber == $columnNumber) {
+                    return $columnNumber;
+                }
+                $self->columnNumbers->{$commit} = $columnNumber;
+                if (defined $self->columns->[$currentColumnNumber] && defined $self->columns->[$columnNumber]) {
+                   ($self->columns->[$currentColumnNumber], $self->columns->[$columnNumber]) =
+                     ($self->columns->[$columnNumber], $self->columns->[$currentColumnNumber]);
+                } elsif (defined $self->columns->[$currentColumnNumber]) {
+                    $self->columns->[$columnNumber] = $self->columns->[$currentColumnNumber];
+                    $self->columns->[$currentColumnNumber] = undef;
+                } elsif (defined $self->columns->[$columnNumber]) {
+                    # do nothing
+                } else {
+                    $self->columns->[$columnNumber] = { status => 'new' };
+                }
+                return $columnNumber;
+            }
+            return $self->columnNumbers->{$commit};
+        }
+
+        $convertSub->();
+        $self->columnNumbers->{$commit} = $columnNumber;
+        $self->columns->[$columnNumber] //= { status => 'new' };
+        return $columnNumber;
     }
 
     sub swapColumnNumbers {
         my ($self, $a, $b) = @_;
         foreach my $commit (keys %{$self->columnNumbers}) {
             if ($self->columnNumbers->{$commit} == $a) {
-                $self->columnNumbers->{$commit} = $b;
+                $self->assignColumnNumber($commit, $b, 'force');
             } elsif ($self->columnNumbers->{$commit} == $b) {
-                $self->columnNumbers->{$commit} = $a;
+                $self->assignColumnNumber($commit, $a, 'force');
             }
         }
         ($self->columns->[$a], $self->columns->[$b]) = ($self->columns->[$b], $self->columns->[$a]);
+    }
+
+    # avoid situations like this:
+    #
+    #     A   B   C   E   F
+    #  ---*---*---*---*---*
+    #      \               \
+    #       *-----*---------*---
+    #       D               G
+    #
+    # children            parents
+    #
+    # <-- reaches and mergesInto relationships
+    #     e.g., E reaches A
+    sub computeColumnNumbersPhase0 {
+        my ($self, $commit, @parents) = @_;
+        if (scalar @parents >= 2) {
+            foreach my $parent (@parents) {
+                $self->mergesInto->{$parent}->{$commit} = 1;
+            }
+        }
+        foreach my $parent (@parents) {
+            foreach my $grandchild (keys %{$self->mergesInto->{$commit}}) {
+                if ($self->mergesInto->{$parent}->{$grandchild}) {
+                    if ($self->verbosity) {
+                        printf("[6] grandchild %s column number %s\n",
+                               $grandchild, $self->columnNumbers->{$grandchild} // '-');
+                    }
+                    my $cn = $self->assignColumnNumber($parent, sub {
+                                                           return $self->columnNumbers->{$grandchild} //
+                                                             $self->nextColumnNumber();
+                                                       });
+                } else {
+                    $self->mergesInto->{$parent}->{$grandchild} = 1;
+                }
+            }
+        }
     }
 
     sub computeColumnNumbers {
@@ -554,15 +636,15 @@ package My::Git::Graph2 {
         my $commit = $self->commit;
         my ($parent, @otherParents) = @{$self->parents};
 
-        $self->columnNumbers->{$commit} //= $self->getNextColumnNumber();
-        $self->commitColumnNumber($self->columnNumbers->{$commit});
+        my $cn = $self->assignColumnNumber($commit, sub { $self->getNextColumnNumber() });
+        $self->commitColumnNumber($cn);
         if (defined $parent) {
             if (!defined $self->columnNumbers->{$parent}) {
-                $self->columnNumbers->{$parent} = $self->columnNumbers->{$commit};
+                $self->assignColumnNumber($parent, $cn, 'force');
             }
         }
         foreach my $otherParent (@otherParents) {
-            $self->columnNumbers->{$otherParent} //= $self->getNextColumnNumber();
+            $self->assignColumnNumber($otherParent, sub { $self->getNextColumnNumber() });
         }
     }
 
@@ -574,17 +656,15 @@ package My::Git::Graph2 {
         $self->computeColumnNumbers();
 
         my $cn = $self->columnNumbers->{$commit};
-        $self->columns->[$cn] //= { };
-        $self->columns->[$cn]->{status} = defined $parent ? 'active' : 'done';
+        my $status = defined $parent ? 'active' : 'done';
+        $self->columns->[$cn]->{status} = $status;
 
         if (defined $parent) {
             my $cn = $self->columnNumbers->{$parent};
-            $self->columns->[$cn] //= { status => 'new' };
         }
 
         foreach my $otherParent (@otherParents) {
             my $cn = $self->columnNumbers->{$otherParent};
-            $self->columns->[$cn] //= { status => 'new' };
         }
     }
 
