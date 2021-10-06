@@ -633,14 +633,6 @@ package My::Git::Graph2 {
         my $cn = $self->columnNumbers->{$commit};
         my $status = defined $parent ? 'active' : 'done';
         $self->columns->[$cn]->{status} = $status;
-
-        if (defined $parent) {
-            my $cn = $self->columnNumbers->{$parent};
-        }
-
-        foreach my $otherParent (@otherParents) {
-            my $cn = $self->columnNumbers->{$otherParent};
-        }
     }
 
     sub cleanupClosedColumns {
