@@ -174,7 +174,6 @@ package My::Git::Graph2 {
         has showParents            => (is => 'rw', default => 0);
         has padding                => (is => 'rw', default => 32);
         has stdin                  => (is => 'rw', default => 0);
-        has breathingRoom          => (is => 'rw', default => 0);
         has verbosity              => (is => 'rw', default => 0);
         has dryRun                 => (is => 'rw', default => 0);
         has wrapColumns            => (is => 'rw');
@@ -653,11 +652,7 @@ package My::Git::Graph2 {
             my $column = $self->columns->[$i];
             if (defined $column) {
                 if ($column->{status} eq 'done') {
-                    if ($self->breathingRoom) {
-                        $self->columns->[$i]->{status} = 'closing';
-                    } else {
-                        $self->columns->[$i] = undef;
-                    }
+                    $self->columns->[$i] = undef;
                 } elsif ($i == $self->commitColumnNumber) {
                     my $continues = 0;
                     foreach my $parent (@{$self->parents}) {
@@ -667,11 +662,7 @@ package My::Git::Graph2 {
                         }
                     }
                     if (!$continues) {
-                        if ($self->breathingRoom) {
-                            $self->columns->[$i]->{status} = 'closing';
-                        } else {
-                            $self->columns->[$i] = undef;
-                        }
+                        $self->columns->[$i] = undef;
                     }
                 }
             }
