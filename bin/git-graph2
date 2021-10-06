@@ -573,18 +573,6 @@ package My::Git::Graph2 {
         return $columnNumber;
     }
 
-    sub swapColumnNumbers {
-        my ($self, $a, $b) = @_;
-        foreach my $commit (keys %{$self->columnNumbers}) {
-            if ($self->columnNumbers->{$commit} == $a) {
-                $self->assignColumnNumber($commit, $b, 'force');
-            } elsif ($self->columnNumbers->{$commit} == $b) {
-                $self->assignColumnNumber($commit, $a, 'force');
-            }
-        }
-        ($self->columns->[$a], $self->columns->[$b]) = ($self->columns->[$b], $self->columns->[$a]);
-    }
-
     # avoid situations like this:
     #
     #     A   B   C   E   F
