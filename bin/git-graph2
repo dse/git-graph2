@@ -499,7 +499,7 @@ package My::Git::Graph2 {
             }
         }
 
-        $self->startNextCommit($commitLine, $commit, @parents);
+        $self->startCommit($commitLine, $commit, @parents);
     }
 
     sub eof {
@@ -509,7 +509,7 @@ package My::Git::Graph2 {
         }
     }
 
-    sub startNextCommit {
+    sub startCommit {
         my ($self, $line, $commit, @parents) = @_;
 
         if (defined $self->commit) {
