@@ -22,6 +22,10 @@ select(STDERR); $| = 1;
 select(STDOUT);
 
 #------------------------------------------------------------------------------
+use FindBin;
+use lib "${FindBin::Bin}/../lib";
+
+#------------------------------------------------------------------------------
 my $g2 = My::Git::Graph2::Style1->new();
 
 #------------------------------------------------------------------------------
@@ -141,6 +145,9 @@ $g2->run(@ARGV);
 ###############################################################################
 
 package My::Git::Graph2 {
+    use FindBin;
+    use lib "${FindBin::Bin}/../lib";
+
     use Sort::Naturally qw(nsort);
     use String::ShellQuote qw(shell_quote);
     use Text::Tabs qw(expand);
@@ -149,8 +156,9 @@ package My::Git::Graph2 {
     use Text::Wrap qw();
     use List::Util qw(min max);
     use Moo;
-    use POSIX qw(dup2);
     use IO::Pty;
+
+    use Self::Pager qw(pager);
 
     INIT {
         # state
@@ -213,7 +221,7 @@ package My::Git::Graph2 {
 
     sub run {
         my ($self, @args) = @_;
-        $self->less();
+        pager();
         $self->collectRevs();
         $self->collectRevLists();
         $self->printRevListLegends();
@@ -221,37 +229,6 @@ package My::Git::Graph2 {
             $self->runStdin(@args);
         } else {
             $self->runGit(@args);
-        }
-    }
-
-    # TODO: consider using IO::Pager.
-    sub less {
-        my ($self) = @_;
-        if (!(-t fileno(\*STDOUT) && -t fileno(\*STDIN))) {
-            return;
-        }
-
-        my $pager = $ENV{GIT_GRAPH2_PAGER} // $ENV{GIT_PAGER} // $ENV{PAGER} // 'less';
-
-        my ($childInput, $parentOutput);
-        pipe($childInput, $parentOutput) or die("pipe: $!");
-        my $pid = fork();
-        die("fork: $!") if !defined $pid;
-
-        my $me = sub {
-            dup2(fileno($parentOutput), 1) or die("dup2: $!");
-        };
-        my $less = sub {
-            dup2(fileno($childInput), 0) or die("dup2: $!");
-            exec($pager) or die("exec: $!");
-        };
-
-        if ($pid) {
-            # parent
-            $less->();
-        } else {
-            # child
-            $me->();
         }
     }
 
