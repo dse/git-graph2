@@ -264,26 +264,27 @@ package My::Git::Graph2 {
         my ($self) = shift;
         foreach my $revListName (keys %{$self->revList}) {
             my $spec = $self->revList->{$revListName}->{spec};
-            my $ph;
-            my @cmd = $self->getGitRevListCommand($spec);
-            if ($self->verbosity >= 1) {
-                printf STDERR ("+ %s\n", shell_quote(@cmd));
-            }
-            if (!open($ph, '-|', @cmd)) {
-                warn("failed to open pipe to git rev-list: $!\n");
-                next revList;
-            }
-            my @revList;
-            while (<$ph>) {
-                s{\R\z}{};
-                s{^\s*}{};
-                s{\s*$}{};
-                if ($_ =~ m{^[[:xdigit:]]+$}) {
-                    push(@revList, $_);
-                }
-            }
+            my @revList = $self->getRevList($spec);
+            my %revHash = map { ($_ => 1) } @revList;
             $self->revList->{$revListName}->{revList} = [@revList];
+            $self->revList->{$revListName}->{revHash} = {%revList};
         }
+    }
+
+    sub getRevList {
+        my ($self, $spec) = @_;
+        my @cmd = ('git', 'rev-list', $spec);
+        printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->verbosity >= 1;
+        open(my $fh, '-|', @cmd) or die("@cmd: $!\n");
+        my @revList;
+        local $_;
+        while (<$ph>) {
+            s{\R\z}{};
+            s{^\s*}{};
+            s{\s*$}{};
+            push(@revList, $_) if ($_ =~ m{^[[:xdigit:]]+$});
+        }
+        return @revList;
     }
 
     sub printRevListLegends {
@@ -861,17 +862,6 @@ package My::Git::Graph2 {
             'git', 'log', '--parents', '--topo-order', @color,
             @{$self->gitLogOptions},
             @args
-        );
-        if (wantarray) {
-            return @cmd;
-        }
-        return shell_quote(@cmd);
-    }
-
-    sub getGitRevListCommand {
-        my ($self, $spec) = @_;
-        my @cmd = (
-            'git', 'rev-list', $spec
         );
         if (wantarray) {
             return @cmd;
