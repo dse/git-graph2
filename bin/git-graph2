@@ -207,13 +207,6 @@ package My::Git::Graph2 {
         has isatty => (is => 'rw', default => 0); # for color handling
     }
 
-    our @endHandler;
-    END {
-        foreach my $endHandler (@endHandler) {
-            $endHandler->();
-        }
-    }
-
     sub BUILD {
         my ($self) = @_;
         $self->isatty(1) if -t 1; # for color handling
@@ -235,33 +228,17 @@ package My::Git::Graph2 {
     sub collectRevs {
         my ($self) = @_;
         foreach my $rev (@{$self->markBranchesOff}) {
-            my $commitid1 = $self->getShortRev($rev);
-            my $commitid2 = $self->getLongRev($rev);
+            my $commitid1 = $self->getRev($rev, 1); # short
+            my $commitid2 = $self->getRev($rev, 0); # long
             push(@{$self->markBranchesOffCommits}, $commitid1) if defined $commitid1;
             push(@{$self->markBranchesOffCommits}, $commitid2) if defined $commitid2;
         }
     }
 
-    sub getShortRev {
-        my ($self, $ref) = @_;
-        return $self->shortRevs->{$ref} if exists $self->shortRevs->{$ref};
-        my $rev = $self->getRev($ref, 1);
-        return unless defined $rev;
-        $self->shortRevs->{$ref} = $rev;
-        return $rev;
-    }
-
-    sub getLongRev {
-        my ($self, $ref) = @_;
-        return $self->longRevs->{$ref} if exists $self->longRevs->{$ref};
-        my $rev = $self->getRev($ref, 0);
-        return unless defined $rev;
-        $self->longRevs->{$ref} = $rev;
-        return $rev;
-    }
-
     sub getRev {
         my ($self, $ref, $short) = @_;
+        my $hash = $short ? $self->shortRevs : $self->longRevs;
+        return $hash->{$ref} if exists $hash->{ref};
         my @cmd;
         if ($short) {
             @cmd = ('git', 'rev-parse', '--short', $ref);
@@ -279,6 +256,7 @@ package My::Git::Graph2 {
         my $commitid = <$ph>;
         return unless defined $commitid;
         $commitid =~ s{\R\z}{};
+        $hash->{$ref} = $commitid;
         return $commitid;
     }
 
