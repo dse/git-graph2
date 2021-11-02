@@ -159,7 +159,8 @@ package My::Git::Graph2 {
     use Moo;
     use IO::Pty;
 
-    use Self::Pager qw(pager);
+    use lib "$ENV{HOME}/git/dse.d/perl-io-pager-self/lib";
+    use IO::Pager::Self qw(pager);
 
     INIT {
         # state
