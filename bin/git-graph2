@@ -249,20 +249,21 @@ package My::Git::Graph2 {
 
     sub collectRevLists {
         my ($self) = @_;
-        foreach my $revSpecName (keys %{$self->markRevSpec}) {
-            my $markRevSpec = $self->markRevSpec->{$revSpecName};
+        foreach my $marker (keys %{$self->markRevSpec}) {
+            my $markRevSpec = $self->markRevSpec->{$marker};
             my @markRevList = $self->getRevList($markRevSpec);
             my %markRevHash = map { ($_ => 1) } @markRevList;
-            $self->markRevList->{$revSpecName} = [@markRevList];
-            $self->markRevHash->{$revSpecName} = {%markRevHash};
+            $self->markRevList->{$marker} = [@markRevList];
+            $self->markRevHash->{$marker} = {%markRevHash};
         }
     }
 
     sub markRevLists {
         my ($self) = @_;
-        foreach my $revSpecName (keys %{$self->markRevSpec}) {
-            foreach my $rev (@{$self->markRevList->{$revSpecName}}) {
-                $self->treeGraph->{mark}->{$rev}->{$revSpecName} = 1;
+        foreach my $marker (keys %{$self->markRevSpec}) {
+            foreach my $rev (@{$self->markRevList->{$marker}}) {
+                $self->treeGraph->{mark}->{$marker} = 1;
+                $self->treeGraph->{mark}->{$rev}->{$marker} = 1;
             }
         }
     }
@@ -286,18 +287,18 @@ package My::Git::Graph2 {
     sub printRevListLegends {
         my ($self) = @_;
         my $hasLegends = 0;
-        foreach my $revSpecName (nsort keys %{$self->markRevSpec}) {
-            my $markRevSpec = $self->markRevSpec->{$revSpecName};
-            my $count   = scalar @{$self->markRevList->{$revSpecName}};
+        foreach my $marker (nsort keys %{$self->markRevSpec}) {
+            my $markRevSpec = $self->markRevSpec->{$marker};
+            my $count   = scalar @{$self->markRevList->{$marker}};
             my $parenthetical = '';
-            if ($revSpecName =~ m{^(.*)\.\.\.(.*)$}) {
+            if ($marker =~ m{^(.*)\.\.\.(.*)$}) {
                 my ($r1, $r2) = ($1, $2);
                 $parenthetical = sprintf(" (commits in %s or %s but not both)", $r2, $r1);
-            } elsif ($revSpecName =~ m{^(.*)\.\.(.*)$}) {
+            } elsif ($marker =~ m{^(.*)\.\.(.*)$}) {
                 my ($r1, $r2) = ($1, $2);
                 $parenthetical = sprintf(" (commits in %s but not in %s)", $r2, $r1);
             }
-            printf("%s = %s, %d revisions%s\n", $revSpecName, $markRevSpec, $count, $parenthetical);
+            printf("%s = %s, %d revisions%s\n", $marker, $markRevSpec, $count, $parenthetical);
             $hasLegends = 1;
         }
         if ($hasLegends) {
