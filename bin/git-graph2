@@ -62,7 +62,6 @@ Getopt::Long::GetOptions(
     'A=s'                  => sub { $g2->markRevSpec->{A} = $_[1]; },
     'B=s'                  => sub { $g2->markRevSpec->{B} = $_[1]; },
     'C=s'                  => sub { $g2->markRevSpec->{C} = $_[1]; },
-    'D=s'                  => sub { $g2->markRevSpec->{D} = $_[1]; },
 
     # git log options
     'abbrev-commit'        => sub { $abbrev = 1; $g2->getoptLongOption('--abbrev-commit'); },
@@ -100,11 +99,10 @@ options:
     -v, --verbose
         --wrap[=<num>]          wrap commit log messages
         --mark-merges
-to mark revisions in a revision range with 'A'/'B'/'C'/'D' instead of '*':
+to mark revisions in a revision range with 'A'/'B'/'C' instead of '*':
     -A, --A='<revision-range>'
     -B, --B='<revision-range>'
     -C, --C='<revision-range>'
-    -D, --D='<revision-range>'
 options passed to git log:
         --abbrev-commit
         --no-abbrev-commit
@@ -184,7 +182,7 @@ package My::Git::Graph2 {
         has markBranchesOffCommits => (is => 'rw', default => sub { return []; }); # converted to commitids
 
         # mark certain revisions
-        has markRevSpec => (is => 'rw', default => sub { return {}; }); # -A<revspec>
+        has markRevSpec => (is => 'rw', default => sub { return {}; }); # -A<revspec>, -B, -C
         has markRevList => (is => 'rw', default => sub { return {}; });
         has markRevHash => (is => 'rw', default => sub { return {}; });
 
