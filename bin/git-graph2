@@ -263,7 +263,7 @@ package My::Git::Graph2 {
         foreach my $marker (keys %{$self->markRevSpec}) {
             foreach my $rev (@{$self->markRevList->{$marker}}) {
                 $self->treeGraph->{mark}->{$marker} = 1;
-                $self->treeGraph->{mark}->{$rev}->{$marker} = 1;
+                $self->treeGraph->{revmark}->{$rev}->{$marker} = 1;
             }
         }
     }
@@ -289,7 +289,7 @@ package My::Git::Graph2 {
         my $hasLegends = 0;
         foreach my $marker (nsort keys %{$self->markRevSpec}) {
             my $markRevSpec = $self->markRevSpec->{$marker};
-            my $count   = scalar @{$self->markRevList->{$marker}};
+            my $count = scalar @{$self->markRevList->{$marker}};
             my $parenthetical = '';
             if ($marker =~ m{^(.*)\.\.\.(.*)$}) {
                 my ($r1, $r2) = ($1, $2);
