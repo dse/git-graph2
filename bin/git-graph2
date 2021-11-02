@@ -44,9 +44,11 @@ Getopt::Long::GetOptions(
     'parents|show-parents' => \$showParents,
     'stdin'                => \$stdin,
     'wrap:i'               => sub { $wrapColumns = defined $_[1] ? $_[1] : 0; },
+
     'mark-merges'          => sub { $g2->markMerges('mark'); },
     'hide-merges'          => sub { $g2->markMerges('hide'); },
     'mark-branches-off=s'  => sub { push(@{$g2->markBranchesOff}, $_[1]); },
+
     'adog' => sub {
         push(
             @{$g2->gitLogOptions},
@@ -57,10 +59,10 @@ Getopt::Long::GetOptions(
     },
 
     # revlist options
-    'A=s'                  => sub { $g2->revSpec->{A} = $_[1]; },
-    'B=s'                  => sub { $g2->revSpec->{B} = $_[1]; },
-    'C=s'                  => sub { $g2->revSpec->{C} = $_[1]; },
-    'D=s'                  => sub { $g2->revSpec->{D} = $_[1]; },
+    'A=s'                  => sub { $g2->markRevSpec->{A} = $_[1]; },
+    'B=s'                  => sub { $g2->markRevSpec->{B} = $_[1]; },
+    'C=s'                  => sub { $g2->markRevSpec->{C} = $_[1]; },
+    'D=s'                  => sub { $g2->markRevSpec->{D} = $_[1]; },
 
     # git log options
     'abbrev-commit'        => sub { $abbrev = 1; $g2->getoptLongOption('--abbrev-commit'); },
@@ -175,18 +177,18 @@ package My::Git::Graph2 {
         has verbosity              => (is => 'rw', default => 0);
         has dryRun                 => (is => 'rw', default => 0);
         has wrapColumns            => (is => 'rw');
-        has markMerges             => (is => 'rw');
         has abbrev                 => (is => 'rw', default => 1);
 
+        has markMerges             => (is => 'rw');
         has markBranchesOff        => (is => 'rw', default => sub { return []; }); # supplied on cmdline
         has markBranchesOffCommits => (is => 'rw', default => sub { return []; }); # converted to commitids
 
-        # mark certain revlists
-        has revSpec => (is => 'rw', default => sub { return {}; }); # -A<revspec>
-        has revList => (is => 'rw', default => sub { return {}; });
-        has revHash => (is => 'rw', default => sub { return {}; });
+        # mark certain revisions
+        has markRevSpec => (is => 'rw', default => sub { return {}; }); # -A<revspec>
+        has markRevList => (is => 'rw', default => sub { return {}; });
+        has markRevHash => (is => 'rw', default => sub { return {}; });
 
-        # mark certain revs
+        # related to revision marking
         has revs => (is => 'rw', default => sub { return {}; });
 
         has commits       => (is => 'rw', default => sub { return []; }); # [ commit, ... ]
@@ -247,12 +249,12 @@ package My::Git::Graph2 {
 
     sub collectRevLists {
         my ($self) = shift;
-        foreach my $revSpecName (keys %{$self->revSpec}) {
-            my $revSpec = $self->revSpec->{$revSpecName};
-            my @revList = $self->getRevList($revSpec);
-            my %revHash = map { ($_ => 1) } @revList;
-            $self->revList->{$revSpecName} = [@revList];
-            $self->revHash->{$revSpecName} = {%revHash};
+        foreach my $revSpecName (keys %{$self->markRevSpec}) {
+            my $markRevSpec = $self->markRevSpec->{$revSpecName};
+            my @markRevList = $self->getRevList($markRevSpec);
+            my %markRevHash = map { ($_ => 1) } @markRevList;
+            $self->markRevList->{$revSpecName} = [@markRevList];
+            $self->markRevHash->{$revSpecName} = {%markRevHash};
         }
     }
 
@@ -261,23 +263,23 @@ package My::Git::Graph2 {
         my @cmd = ('git', 'rev-list', ($self->abbrev ? '--abbrev-commit' : '--no-abbrev-commit'), $spec);
         printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->verbosity >= 1;
         open(my $ph, '-|', @cmd) or die("@cmd: $!\n");
-        my @revList;
+        my @markRevList;
         local $_;
         while (<$ph>) {
             s{\R\z}{};
             s{^\s*}{};
             s{\s*$}{};
-            push(@revList, $_) if ($_ =~ m{^[[:xdigit:]]+$});
+            push(@markRevList, $_) if ($_ =~ m{^[[:xdigit:]]+$});
         }
-        return @revList;
+        return @markRevList;
     }
 
     sub printRevListLegends {
         my ($self) = @_;
         my $hasLegends = 0;
-        foreach my $revSpecName (nsort keys %{$self->revSpec}) {
-            my $revSpec = $self->revSpec->{$revSpecName};
-            my $count   = scalar @{$self->revList->{$revSpecName}};
+        foreach my $revSpecName (nsort keys %{$self->markRevSpec}) {
+            my $markRevSpec = $self->markRevSpec->{$revSpecName};
+            my $count   = scalar @{$self->markRevList->{$revSpecName}};
             my $parenthetical = '';
             if ($revSpecName =~ m{^(.*)\.\.\.(.*)$}) {
                 my ($r1, $r2) = ($1, $2);
@@ -286,7 +288,7 @@ package My::Git::Graph2 {
                 my ($r1, $r2) = ($1, $2);
                 $parenthetical = sprintf(" (commits in %s but not in %s)", $r2, $r1);
             }
-            printf("%s = %s, %d revisions%s\n", $revSpecName, $revSpec, $count, $parenthetical);
+            printf("%s = %s, %d revisions%s\n", $revSpecName, $markRevSpec, $count, $parenthetical);
             $hasLegends = 1;
         }
         if ($hasLegends) {
@@ -296,19 +298,19 @@ package My::Git::Graph2 {
 
     sub revListHas {
         my ($self, $revListName, $commit) = @_;
-        my $revList = $self->revList->{$revListName};
-        return if !$revList;
-        my $revHash = $self->revHash->{$revListName};
-        return if !$revHash;
-        return $revHash->{$commit};
+        my $markRevList = $self->markRevList->{$revListName};
+        return if !$markRevList;
+        my $markRevHash = $self->markRevHash->{$revListName};
+        return if !$markRevHash;
+        return $markRevHash->{$commit};
     }
 
     sub whichRevListsHave {
         my ($self, $commit, $single) = @_;
         my @result;
-        foreach my $revSpecName (sort keys %{$self->revSpec}) {
+        foreach my $revSpecName (sort keys %{$self->markRevSpec}) {
             return $revSpecName if $single;
-            push(@result, $revSpecName) if $self->revHash->{$revSpecName}->{$commit};
+            push(@result, $revSpecName) if $self->markRevHash->{$revSpecName}->{$commit};
         }
         return @result;
     }
