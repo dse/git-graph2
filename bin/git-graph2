@@ -213,6 +213,7 @@ package My::Git::Graph2 {
         pager();
         $self->collectRevs();
         $self->collectRevLists();
+        $self->markRevLists();
         $self->printRevListLegends();
         if ($self->stdin) {
             $self->runStdin(@args);
@@ -248,13 +249,22 @@ package My::Git::Graph2 {
     }
 
     sub collectRevLists {
-        my ($self) = shift;
+        my ($self) = @_;
         foreach my $revSpecName (keys %{$self->markRevSpec}) {
             my $markRevSpec = $self->markRevSpec->{$revSpecName};
             my @markRevList = $self->getRevList($markRevSpec);
             my %markRevHash = map { ($_ => 1) } @markRevList;
             $self->markRevList->{$revSpecName} = [@markRevList];
             $self->markRevHash->{$revSpecName} = {%markRevHash};
+        }
+    }
+
+    sub markRevLists {
+        my ($self) = @_;
+        foreach my $revSpecName (keys %{$self->markRevSpec}) {
+            foreach my $rev (@{$self->markRevList->{$revSpecName}}) {
+                $self->treeGraph->{mark}->{$rev} = $revSpecName;
+            }
         }
     }
 
@@ -489,5 +499,4 @@ package My::Git::Graph2 {
             @{$self->gitLogOptions}, @args
         );
     }
-
 };
