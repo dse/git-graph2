@@ -296,25 +296,6 @@ package My::Git::Graph2 {
         }
     }
 
-    sub revListHas {
-        my ($self, $revListName, $commit) = @_;
-        my $markRevList = $self->markRevList->{$revListName};
-        return if !$markRevList;
-        my $markRevHash = $self->markRevHash->{$revListName};
-        return if !$markRevHash;
-        return $markRevHash->{$commit};
-    }
-
-    sub whichRevListsHave {
-        my ($self, $commit, $single) = @_;
-        my @result;
-        foreach my $revSpecName (sort keys %{$self->markRevSpec}) {
-            return $revSpecName if $single;
-            push(@result, $revSpecName) if $self->markRevHash->{$revSpecName}->{$commit};
-        }
-        return @result;
-    }
-
     sub getoptLongOption {
         my ($self, $option, $type, @getoptLongArgs) = @_;
         my ($optionName, $value, $key) = @getoptLongArgs;
