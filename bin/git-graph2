@@ -210,6 +210,7 @@ package My::Git::Graph2 {
 
     sub run {
         my ($self, @args) = @_;
+        $self->treeGraph->{isatty} = $self->isatty;
         pager();
         $self->collectRevs();
         $self->collectRevLists();
