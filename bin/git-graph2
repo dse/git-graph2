@@ -264,7 +264,7 @@ package My::Git::Graph2 {
         my ($self) = @_;
         foreach my $revSpecName (keys %{$self->markRevSpec}) {
             foreach my $rev (@{$self->markRevList->{$revSpecName}}) {
-                $self->treeGraph->{mark}->{$rev} = $revSpecName;
+                $self->treeGraph->{mark}->{$rev}->{$revSpecName} = 1;
             }
         }
     }
