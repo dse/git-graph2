@@ -270,7 +270,14 @@ package My::Git::Graph2 {
 
     sub getRevList {
         my ($self, $spec) = @_;
-        my @cmd = ('git', 'rev-list', ($self->abbrev ? '--abbrev-commit' : '--no-abbrev-commit'), $spec);
+        my $firstParents = 0;
+        if ($spec =~ s{\+$}{}) {
+            $firstParents = 1;
+        }
+        my @cmd = ('git', 'rev-list',
+                   ($firstParents ? '--first-parent' : ()),
+                   ($self->abbrev ? '--abbrev-commit' : '--no-abbrev-commit'),
+                   $spec);
         printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->verbosity >= 1;
         open(my $ph, '-|', @cmd) or die("@cmd: $!\n");
         my @markRevList;
