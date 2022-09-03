@@ -221,7 +221,7 @@ package My::Git::Graph2 {
             isatty                 => 0,
             treeGraph              => Tree::CommitGraph->new(),
 
-            method                 => 0,
+            method                 => 1,
         };
     }
 
@@ -443,17 +443,34 @@ package My::Git::Graph2 {
         $self->endCommit() if defined $self->{commit};
         $self->{commit} = $commit;
         $self->{parents} = \@parents;
-        $self->{treeGraph}->processCommit(commit => $commit, parents => [@parents]);
-        $self->{treeGraph}->printCommitLine($line);
+        if ($self->{method} == 0) {
+            $self->{treeGraph}->processCommit(commit => $commit, parents => [@parents]);
+            $self->{treeGraph}->printCommitLine($line);
+        }
+        if ($self->{method} == 1) {
+            push(@{$self->{commits}}, $commit);
+            $self->{commitParents}->{$commit} = \@parents;
+            push(@{$self->{commitLogs}->{$commit}}, $line);
+        }
     }
 
     sub continueCommit {
         my ($self, $line) = @_;
-        $self->{treeGraph}->printCommitLine($line);
+        if ($self->{method} == 0) {
+            $self->{treeGraph}->printCommitLine($line);
+        }
     }
 
     sub runCommits {
         my ($self) = @_;
+        foreach my $commit (@{$self->{commits}}) {
+            my @parents = @{$self->{commitParents}->{$commit}};
+            $self->{treeGraph}->processCommit(commit => $commit, parents => [@parents]);
+            foreach my $line (@{$self->{commitLogs}->{$commit}}) {
+                $self->{treeGraph}->printCommitLine($line);
+            }
+            $self->{treeGraph}->endCommit();
+        }
     }
 
     sub markMerge {
@@ -527,7 +544,9 @@ package My::Git::Graph2 {
 
     sub endCommit {
         my ($self) = @_;
-        $self->{treeGraph}->endCommit();
+        if ($self->{method} == 0) {
+            $self->{treeGraph}->endCommit();
+        }
         $self->{commit} = undef;
         $self->{parents} = [];
     }
