@@ -45,13 +45,13 @@ Getopt::Long::GetOptions(
     'stdin'                => \$stdin,
     'wrap:i'               => sub { $wrapColumns = defined $_[1] ? $_[1] : 0; },
 
-    'mark-merges'          => sub { $g2->markMerges('mark'); },
-    'hide-merges'          => sub { $g2->markMerges('hide'); },
-    'mark-branches-off=s'  => sub { push(@{$g2->markBranchesOff}, $_[1]); },
+    'mark-merges'          => sub { $g2->{markMerges} = 'mark'; },
+    'hide-merges'          => sub { $g2->{markMerges} = 'hide'; },
+    'mark-branches-off=s'  => sub { push(@{$g2->{markBranchesOff}}, $_[1]); },
 
     'adog' => sub {
         push(
-            @{$g2->gitLogOptions},
+            @{$g2->{gitLogOptions}},
             '--all',
             '--oneline',
             '--decorate',
@@ -59,9 +59,9 @@ Getopt::Long::GetOptions(
     },
 
     # revlist options
-    'A=s'                  => sub { $g2->markRevSpec->{A} = $_[1]; },
-    'B=s'                  => sub { $g2->markRevSpec->{B} = $_[1]; },
-    'C=s'                  => sub { $g2->markRevSpec->{C} = $_[1]; },
+    'A=s'                  => sub { $g2->{markRevSpec}->{A} = $_[1]; },
+    'B=s'                  => sub { $g2->{markRevSpec}->{B} = $_[1]; },
+    'C=s'                  => sub { $g2->{markRevSpec}->{C} = $_[1]; },
 
     # git log options
     'abbrev-commit'        => sub { $abbrev = 1; $g2->getoptLongOption('--abbrev-commit'); },
@@ -128,12 +128,12 @@ END
 
 use String::ShellQuote qw(shell_quote);
 
-$g2->verbosity($verbosity);
-$g2->showParents($showParents);
-$g2->stdin($stdin);
-$g2->wrapColumns($wrapColumns) if defined $wrapColumns;
+$g2->{verbosity} = $verbosity;
+$g2->{showParents} = $showParents;
+$g2->{stdin} = $stdin;
+$g2->{wrapColumns} = $wrapColumns if defined $wrapColumns;
 
-if ($g2->dryRun) {
+if ($g2->{dryRun}) {
     printf STDERR ("+ %s\n", shell_quote($g2->getGitLogCommand(@ARGV)));
     exit(0);
 }
@@ -156,65 +156,91 @@ package My::Git::Graph2 {
     use Storable qw(dclone);
     use Text::Wrap qw();
     use List::Util qw(min max);
-    use Moo;
     use IO::Pty;
 
     use lib "$ENV{HOME}/git/dse.d/perl-io-pager-self/lib";
     use IO::Pager::Self qw(pager);
 
-    INIT {
-        # state
-        has commit                 => (is => 'rw');
-        has parents                => (is => 'rw', default => sub { return []; });
+    use fields qw(commit
+                  parents
+                  gitLogOptions
+                  showParents
+                  padding
+                  stdin
+                  verbosity
+                  dryRun
+                  wrapColumns
+                  abbrev
+                  markMerges
+                  markBranchesOff
+                  markBranchesOffCommits
+                  markRevSpec
+                  markRevList
+                  markRevHash
+                  revs
+                  commits
+                  commitParents
+                  commitLogs
+                  isatty
+                  treeGraph
+                  method
+                  commitIds);
 
-        # options
-        has gitLogOptions          => (is => 'rw', default => sub { return []; });
-        has showParents            => (is => 'rw', default => 0);
-        has padding                => (is => 'rw', default => 32);
-        has stdin                  => (is => 'rw', default => 0);
-        has verbosity              => (is => 'rw', default => 0);
-        has dryRun                 => (is => 'rw', default => 0);
-        has wrapColumns            => (is => 'rw');
-        has abbrev                 => (is => 'rw', default => 1);
+    sub defaults {
+        return {
+            # state
+            commit                 => undef,
+            parents                => [],
 
-        has markMerges             => (is => 'rw');
-        has markBranchesOff        => (is => 'rw', default => sub { return []; }); # supplied on cmdline
-        has markBranchesOffCommits => (is => 'rw', default => sub { return []; }); # converted to commitids
+            # options
+            gitLogOptions          => [],
+            showParents            => 0,
+            padding                => 32,
+            stdin                  => 0,
+            verbosity              => 0,
+            dryRun                 => 0,
+            wrapColumns            => undef,
+            abbrev                 => 1,
 
-        # mark certain revisions
-        has markRevSpec => (is => 'rw', default => sub { return {}; }); # -A<revspec>, -B, -C
-        has markRevList => (is => 'rw', default => sub { return {}; });
-        has markRevHash => (is => 'rw', default => sub { return {}; });
+            markMerges             => undef,
+            markBranchesOff        => [], # supplied on cmdline
+            markBranchesOffCommits => [], # converted to commitids
 
-        # related to revision marking
-        has revs => (is => 'rw', default => sub { return {}; });
+            # mark certain revisions
+            markRevSpec            => {}, # -A<revspec>, -B, -C
+            markRevList            => {},
+            markRevHash            => {},
 
-        has commits       => (is => 'rw', default => sub { return []; }); # [ commit, ... ]
-        has commitParents => (is => 'rw', default => sub { return {}; }); # { commit => [ parent, ... ] }
-        has commitLogs    => (is => 'rw', default => sub { return {}; }); # { commit => [ line, ... ] }
+            # related to revision marking
+            revs                   => {},
 
-        has isatty => (is => 'rw', default => 0); # for color handling
-        has treeGraph => (
-            is => 'rw', default => sub {
-                return Tree::CommitGraph->new();
-            }
-        );
+            commits                => [], # [ commit, ... ]
+            commitParents          => {}, # { commit => [ parent, ... ] }
+            commitLogs             => {}, # { commit => [ line, ... ] }
+
+            isatty                 => 0,
+            treeGraph              => Tree::CommitGraph->new(),
+
+            method                 => 0,
+        };
     }
 
-    sub BUILD {
-        my ($self) = @_;
-        $self->isatty(1) if -t 1; # for color handling
+    sub new {
+        my ($class) = @_;
+        my $self = bless(defaults(), $class);
+        $self->{isatty} = 1 if -t 1; # for color handling
+        return $self;
     }
 
     sub run {
         my ($self, @args) = @_;
-        $self->treeGraph->{isatty} = $self->isatty;
+        $self->{treeGraph}->{isatty} = $self->{isatty};
         pager();
         $self->collectRevs();
         $self->collectRevLists();
         $self->markRevLists();
         $self->printRevListLegends();
-        if ($self->stdin) {
+        if ($self->{stdin}) {
             $self->runStdin(@args);
         } else {
             $self->runGit(@args);
@@ -223,18 +249,18 @@ package My::Git::Graph2 {
 
     sub collectRevs {
         my ($self) = @_;
-        foreach my $rev (@{$self->markBranchesOff}) {
+        foreach my $rev (@{$self->{markBranchesOff}}) {
             my $commitid = $self->getRev($rev); # short
-            push(@{$self->markBranchesOffCommits}, $commitid) if defined $commitid;
+            push(@{$self->{markBranchesOffCommits}}, $commitid) if defined $commitid;
         }
     }
 
     sub getRev {
         my ($self, $ref, $short) = @_;
-        my $hash = $self->revs;
+        my $hash = $self->{revs};
         return $hash->{$ref} if exists $hash->{ref};
-        my @cmd = ('git', 'rev-parse', ($self->abbrev ? ('--short') : ()), $ref);
-        printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->verbosity >= 1;
+        my @cmd = ('git', 'rev-parse', ($self->{abbrev} ? ('--short') : ()), $ref);
+        printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->{verbosity} >= 1;
         my $ph;
         if (!open($ph, '-|', @cmd)) {
             warn("failed to open pipe for git rev-parse: $!\n");
@@ -249,21 +275,21 @@ package My::Git::Graph2 {
 
     sub collectRevLists {
         my ($self) = @_;
-        foreach my $marker (keys %{$self->markRevSpec}) {
-            my $markRevSpec = $self->markRevSpec->{$marker};
+        foreach my $marker (keys %{$self->{markRevSpec}}) {
+            my $markRevSpec = $self->{markRevSpec}->{$marker};
             my @markRevList = $self->getRevList($markRevSpec);
             my %markRevHash = map { ($_ => 1) } @markRevList;
-            $self->markRevList->{$marker} = [@markRevList];
-            $self->markRevHash->{$marker} = {%markRevHash};
+            $self->{markRevList}->{$marker} = [@markRevList];
+            $self->{markRevHash}->{$marker} = {%markRevHash};
         }
     }
 
     sub markRevLists {
         my ($self) = @_;
-        foreach my $marker (keys %{$self->markRevSpec}) {
-            foreach my $rev (@{$self->markRevList->{$marker}}) {
-                $self->treeGraph->{mark}->{$marker} = 1;
-                $self->treeGraph->{revmark}->{$rev}->{$marker} = 1;
+        foreach my $marker (keys %{$self->{markRevSpec}}) {
+            foreach my $rev (@{$self->{markRevList}->{$marker}}) {
+                $self->{treeGraph}->{mark}->{$marker} = 1;
+                $self->{treeGraph}->{revmark}->{$rev}->{$marker} = 1;
             }
         }
     }
@@ -276,9 +302,9 @@ package My::Git::Graph2 {
         }
         my @cmd = ('git', 'rev-list',
                    ($firstParents ? '--first-parent' : ()),
-                   ($self->abbrev ? '--abbrev-commit' : '--no-abbrev-commit'),
+                   ($self->{abbrev} ? '--abbrev-commit' : '--no-abbrev-commit'),
                    $spec);
-        printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->verbosity >= 1;
+        printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->{verbosity} >= 1;
         open(my $ph, '-|', @cmd) or die("@cmd: $!\n");
         my @markRevList;
         local $_;
@@ -294,9 +320,9 @@ package My::Git::Graph2 {
     sub printRevListLegends {
         my ($self) = @_;
         my $hasLegends = 0;
-        foreach my $marker (nsort keys %{$self->markRevSpec}) {
-            my $markRevSpec = $self->markRevSpec->{$marker};
-            my $count = scalar @{$self->markRevList->{$marker}};
+        foreach my $marker (nsort keys %{$self->{markRevSpec}}) {
+            my $markRevSpec = $self->{markRevSpec}->{$marker};
+            my $count = scalar @{$self->{markRevList}->{$marker}};
             my $parenthetical = '';
             if ($marker =~ m{^(.*)\.\.\.(.*)$}) {
                 my ($r1, $r2) = ($1, $2);
@@ -321,19 +347,19 @@ package My::Git::Graph2 {
 
         if (defined $value) {
             if ($type eq 'required') {
-                push(@{$self->gitLogOptions}, $option . '=' . $value);
+                push(@{$self->{gitLogOptions}}, $option . '=' . $value);
             } else {
                 if ($value eq '') {
-                    push(@{$self->gitLogOptions}, $option);
+                    push(@{$self->{gitLogOptions}}, $option);
                 } else {
-                    push(@{$self->gitLogOptions}, $option . '=' . $value);
+                    push(@{$self->{gitLogOptions}}, $option . '=' . $value);
                 }
             }
         } else {
             if ($type eq 'required') {
-                push(@{$self->gitLogOptions}, $option . '=');
+                push(@{$self->{gitLogOptions}}, $option . '=');
             } else {
-                push(@{$self->gitLogOptions}, $option);
+                push(@{$self->{gitLogOptions}}, $option);
             }
         }
     }
@@ -348,7 +374,7 @@ package My::Git::Graph2 {
         my ($self, @args) = @_;
         $self->initialize();
         my @cmd = $self->getGitLogCommand();
-        printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->verbosity >= 1;
+        printf STDERR ("+ %s\n", shell_quote(@cmd)) if $self->{verbosity} >= 1;
         my $ph;
         if (!open($ph, '-|', @cmd)) {
             warn("pipe: $!\n");
@@ -394,7 +420,7 @@ package My::Git::Graph2 {
             push(@parents, $parent);
         }
         my $commitLine = $origLine;
-        if (!$self->showParents) {
+        if (!$self->{showParents}) {
             # chop off parents, we're outputting them ourselves
             foreach my $parent (@parents) {
                 $commitLine =~ s{\s+$parent\b}{};
@@ -405,30 +431,38 @@ package My::Git::Graph2 {
 
     sub eof {
         my ($self) = @_;
-        $self->endCommit() if defined $self->commit;
+        $self->endCommit() if defined $self->{commit};
+
+        if ($self->{method} == 1) {
+            $self->runCommits();
+        }
     }
 
     sub startCommit {
         my ($self, $line, $commit, @parents) = @_;
-        $self->endCommit() if defined $self->commit;
-        $self->commit($commit);
-        $self->parents(\@parents);
-        $self->treeGraph->processCommit(commit => $commit, parents => [@parents]);
-        $self->treeGraph->printCommitLine($line);
+        $self->endCommit() if defined $self->{commit};
+        $self->{commit} = $commit;
+        $self->{parents} = \@parents;
+        $self->{treeGraph}->processCommit(commit => $commit, parents => [@parents]);
+        $self->{treeGraph}->printCommitLine($line);
     }
 
     sub continueCommit {
         my ($self, $line) = @_;
-        $self->treeGraph->printCommitLine($line);
+        $self->{treeGraph}->printCommitLine($line);
+    }
+
+    sub runCommits {
+        my ($self) = @_;
     }
 
     sub markMerge {
         my ($self) = @_;
 
-        if (!$self->markMerges) {
+        if (!$self->{markMerges}) {
             return;
         }
-        if (scalar @{$self->parents} < 2) {
+        if (scalar @{$self->{parents}} < 2) {
             return;
         }
 
@@ -436,10 +470,10 @@ package My::Git::Graph2 {
             push(@{$self->commitLog}, '');
         }
 
-        if ($self->markMerges eq 'mark') {
+        if ($self->{markMerges} eq 'mark') {
             $self->commitLog->[0] =~ s{\s+$}{};
             $self->commitLog->[0] .= ' [MERGE]';
-        } elsif ($self->markMerges eq 'hide') {
+        } elsif ($self->{markMerges} eq 'hide') {
             $self->commitLog->[0] = '[MERGE]';
         }
     }
@@ -456,11 +490,11 @@ package My::Git::Graph2 {
 
     sub willMarkBranchOff {
         my ($self) = @_;
-        if (!scalar @{$self->markBranchesOff}) {
+        if (!scalar @{$self->{markBranchesOff}}) {
             return 0;
         }
 
-        foreach my $markOffCommit (@{$self->markBranchesOffCommits}) {
+        foreach my $markOffCommit (@{$self->{markBranchesOffCommits}}) {
             my $columnNumber = $self->columnNumbers->{$markOffCommit};
             next unless defined $columnNumber;
             if ($columnNumber == $self->commitColumnNumber) {
@@ -468,9 +502,9 @@ package My::Git::Graph2 {
             }
         }
 
-        foreach my $markOffCommit (@{$self->markBranchesOffCommits}) {
+        foreach my $markOffCommit (@{$self->{markBranchesOffCommits}}) {
             my $len1 = length $markOffCommit;
-            foreach my $parent (@{$self->parents}) {
+            foreach my $parent (@{$self->{parents}}) {
                 my $len2 = length $parent;
                 my $len = min($len1, $len2);
                 if (substr($markOffCommit, 0, $len) eq substr($parent, 0, $len)) {
@@ -480,7 +514,7 @@ package My::Git::Graph2 {
 
             my $column1 = $self->columnNumbers->{$markOffCommit};
             next unless defined $column1;
-            foreach my $parent (@{$self->parents}) {
+            foreach my $parent (@{$self->{parents}}) {
                 my $column2 = $self->columnNumbers->{$parent};
                 next if !defined $column2;
                 if ($column1 == $column2) {
@@ -493,17 +527,17 @@ package My::Git::Graph2 {
 
     sub endCommit {
         my ($self) = @_;
-        $self->treeGraph->endCommit();
-        $self->commit(undef);
-        $self->parents([]);
+        $self->{treeGraph}->endCommit();
+        $self->{commit} = undef;
+        $self->{parents} = [];
     }
 
     sub getGitLogCommand {
         my ($self, @args) = @_;
         return (
             'git', 'log', '--parents', '--topo-order', '--color',
-            ($self->abbrev ? '--abbrev-commit' : '--no-abbrev-commit'),
-            @{$self->gitLogOptions}, @args
+            ($self->{abbrev} ? '--abbrev-commit' : '--no-abbrev-commit'),
+            @{$self->{gitLogOptions}}, @args
         );
     }
 };
