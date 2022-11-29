@@ -2,7 +2,6 @@
 use warnings;
 use strict;
 use open qw(locale);
-use utf8;
 
 #------------------------------------------------------------------------------
 use File::Basename qw(basename);
