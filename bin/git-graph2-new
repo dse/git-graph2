@@ -7,6 +7,14 @@ our $PROGNAME = basename($0);
 use File::Basename qw(basename);
 use IO::Handle;
 use String::ShellQuote qw(shell_quote);
+use Data::Dumper qw(Dumper);
+    sub dumper {
+        local $Data::Dumper::Indent = 1;
+        local $Data::Dumper::Useqq = 1;
+        local $Data::Dumper::Terse = 1;
+        local $Data::Dumper::Sortkeys = 1;
+        return Dumper(shift());
+    }
 
 STDOUT->autoflush(1);
 STDERR->autoflush(1);
@@ -18,23 +26,26 @@ use Getopt::Long;
 Getopt::Long::Configure('bundling', 'gnu_compat', 'no_ignore_case');
 Getopt::Long::GetOptions(
     'all'               => sub { push(@gitCmd, '--all'); },
-    'decorate:s'        => sub { push(@gitCmd, '--decorate=' . $_[1]); },
+    'decorate:s'        => sub { if ($_[1] =~ m{\S}) { push(@gitCmd, '--decorate=' . $_[1]); } else { push(@gitCmd, '--decorate'); } },
     'no-decorate'       => sub { push(@gitCmd, '--no-decorate'); },
     'date-order'        => sub { push(@gitCmd, '--date-order'); },
     'author-date-order' => sub { push(@gitCmd, '--author-date-order'); },
     'topo-order'        => sub { push(@gitCmd, '--topo-order'); },
-    'pretty:s'          => sub { push(@gitCmd, '--pretty=' . $_[1]); },
+    'pretty:s'          => sub { if ($_[1] =~ m{\S}) { push(@gitCmd, '--pretty=' . $_[1]); } else { push(@gitCmd, '--pretty'); } },
     'format=s'          => sub { push(@gitCmd, '--format=' . $_[1]); },
     'abbrev-commit'     => sub { push(@gitCmd, '--abbrev-commit'); },
     'no-abbrev-commit'  => sub { push(@gitCmd, '--no-abbrev-commit'); },
     'oneline'           => sub { push(@gitCmd, '--oneline'); },
-    'date:s'            => sub { push(@gitCmd, '--date=' . $_[1]); },
+    'date:s'            => sub { if ($_[1] =~ m{\S}) { push(@gitCmd, '--date=' . $_[1]); } else { push(@gitCmd, '--date'); } },
     'parents'           => sub { $options{parents} = 1; },
     'name-status'       => sub { push(@gitCmd, '--name-status'); },
     'no-color'          => sub { push(@gitCmd, '--no-color'); },
-    'abbrev:s'          => sub { push(@gitCmd, '--abbrev=' . $_[1]); },
+    'abbrev:s'          => sub { if ($_[1] =~ m{\S}) { push(@gitCmd, '--abbrev=' . $_[1]); } else { push(@gitCmd, '--abbrev'); } },
     'graph'             => sub { }, # no effect
     'adog|goad'         => sub { push(@gitCmd, '--oneline', '--all', '--decorate'); },
+
+    # our options
+    'stdin'             => sub { $options{stdin} = 1; },
     'help'              => sub { usage(); exit(0); },
 ) or die("Type '$PROGNAME --help' for help.\n");
 
@@ -43,16 +54,24 @@ NO USAGE YET.
 END
 
 my $g = My::Git::Graph->new(%options);
-my $ph;
-open($ph, '-|', @gitCmd) or die("unable to execute git log: $!\n");
-while (<$ph>) {
-    $g->parseLine($_);
+
+if ($options{stdin}) {
+    while (<>) {
+        $g->parseLine($_);
+    }
+    $g->eof();
+} else {
+    my $ph;
+    open($ph, '-|', @gitCmd) or die("unable to execute git log: $!\n");
+    while (<$ph>) {
+        $g->parseLine($_);
+    }
+    $g->eof();
 }
-$g->eof();
 
 package My::Git::Graph {
     use Text::Tabs qw(expand);
-    use List::Util qw(min max);
+    use List::Util qw(min max uniq);
     use Data::Dumper qw(Dumper);
     use Carp::Always;
     sub dumper {
@@ -62,7 +81,6 @@ package My::Git::Graph {
         local $Data::Dumper::Sortkeys = 1;
         return Dumper(shift());
     }
-
     our $RX_ESCAPE;
     BEGIN {
         $RX_ESCAPE = qr{\e\[[0-9;]*m};
@@ -75,7 +93,8 @@ package My::Git::Graph {
         $self->{graphLines} = [];
         $self->{textLines} = [];
         $self->{fillLine} = '';
-        $self->{colDiff} = 2;
+        $self->{colDiff} = 3;
+        $self->{abbrev} = 8;
         return $self;
     }
     sub parseLine {
@@ -83,9 +102,11 @@ package My::Git::Graph {
         $line =~ s{\R\z}{};              # safer than chomp regarding \r\n vs \n
         local $_ = $line;
         $_ = expand($_);
+        my $RX_COMMIT_ID = qr{[[:xdigit:]]
+                              {$self->{abbrev},}}x;
         if (m{^(?<esc1>${RX_ESCAPE})?
               (commit\s+)?
-              (?<commitids>[[:xdigit:]]+(?:\s+[[:xdigit:]]+)*)
+              (?<commitids>(?:$RX_COMMIT_ID)(?:\s+(?:$RX_COMMIT_ID))*\b)
               (?<esc2>\s*${RX_ESCAPE})?
               (?<remainder>.*)$}x) {
             my $esc1      = $+{esc1};
@@ -101,114 +122,62 @@ package My::Git::Graph {
     }
     sub startCommit {
         my ($self, $commit, $firstParent, @otherParents) = @_;
-        # print STDERR ("startCommit commit $commit\n") if defined $commit;
-        # print STDERR ("            firstParent $firstParent\n") if defined $firstParent;
-        # print STDERR ("            otherParents @otherParents\n") if scalar @otherParents;
         $self->printerFlush();
-        my $now  = ($self->{now}  //= {});
-        my $next = ($self->{next} //= {});
-        $now->{$commit} = $self->newColumn($now, $next) if !defined $now->{$commit};
-        $next->{$commit} = $now->{$commit} if defined $firstParent;
-        my $intermediate;
-        if (defined $firstParent) {
-            if (!defined $now->{$firstParent}) {
-                $now->{$firstParent} = $now->{$commit};
-                $next->{$firstParent} = $now->{$commit};
-            } else {
-                my $winner = $self->priorityWinner($commit, $firstParent);
-                if (defined $winner) {
-                    $next->{$commit} = $now->{$winner};
-                    $next->{$firstParent} = $now->{$winner};
-                } else {
-                    my $col = min($now->{$commit}, $now->{$firstParent});
-                    $next->{$commit} = $col;
-                    $next->{$firstParent} = $col;
-                }
-                if ($next->{$commit} != $now->{$commit}) {
-                    $intermediate = { %$next };
-                    $intermediate->{$commit} = $now->{$commit};
-                } elsif ($next->{$firstParent} != $now->{$firstParent}) {
-                    $intermediate = { %$next };
-                    $intermediate->{$firstParent} = $now->{$firstParent};
-                }
+        my $reserved = $self->{RC} //= {};
+        my $columns  = $self->{C} //= {};
+        my $state1   = { %$columns };
+
+        # determine this commit's column
+        if (!defined $columns->{$commit}) {
+            $columns->{$commit} = $self->newColumn($columns);
+            $state1->{$commit} = $columns->{$commit};
+            # printf("# startCommit: commit %s assigned to column %d\n", $commit, $columns->{$commit});
+        }
+
+        if (!defined $firstParent) {
+            delete $state1->{$commit};
+            my $maxCol = max grep { defined $_ } values %$columns;
+            my $line1 = $self->verticalGraphLine($maxCol, $columns, $columns->{$commit});
+            my $line2 = $self->verticalGraphLine($maxCol, $state1);
+            $self->printerGraph($line1);
+            $self->printerGraph($line2);
+            %$columns = %$state1;
+            return;
+        }
+
+        # print("# ", dumper($columns), "\n");
+
+        if (!defined $state1->{$firstParent}) {
+            $state1->{$firstParent} = $columns->{$commit};
+            # printf("# startCommit: first parent %s assigned to column %d\n", $firstParent, $state1->{$firstParent});
+        }
+        foreach my $otherParent (@otherParents) {
+            if (!defined $state1->{$otherParent}) {
+                $state1->{$otherParent} = $self->newColumn($state1);
+                # printf("# startCommit: other parent %s assigned to column %d\n", $otherParent, $state1->{$otherParent});
             }
-            foreach my $otherParent (@otherParents) {
-                if (defined $now->{$otherParent}) {
-                    if (defined $intermediate) {
-                        $intermediate->{$otherParent} = $now->{$otherParent};
-                    } else {
-                        $next->{$otherParent} = $now->{$otherParent};
-                    }
-                } else {
-                    $now->{$otherParent} = $now->{$commit};
-                    if (defined $intermediate) {
-                        $intermediate->{$otherParent} = $self->newColumn($now, $intermediate);
-                    } else {
-                        $next->{$otherParent} = $self->newColumn($now, $next);
-                    }
-                }
-                if (defined $intermediate) {
-                    $next->{$otherParent} = $intermediate->{$otherParent};
-                }
-            }
-        } else {
-            delete $next->{$commit};
         }
-        # print STDERR ("            now  ", dumper($now), "\n");
-        # print STDERR ("            intm ", dumper($intermediate), "\n") if defined $intermediate;
-        # print STDERR ("            next ", dumper($next), "\n");
-        if (defined $firstParent) {
-            $self->priorityAdd($firstParent, @otherParents);
-            $self->priorityReplace($commit, $firstParent);
+        my $maxCol = max grep { defined $_ } (values(%$columns), values(%$state1));
+        my $line0 = $self->verticalGraphLine($maxCol, $columns, $columns->{$commit});
+        $self->printerGraph($line0);
+        delete $state1->{$commit};
+        my @diagLines = $self->diagonalGraphLines($maxCol, $columns, $state1, $commit, $firstParent, @otherParents);
+        foreach my $diagLine (@diagLines) {
+            $self->printerGraph($diagLine);
         }
-        my $column = $now->{$commit};
-        my $v = $self->verticals($next, $next);
-        $self->printerFill($v);
-        if (defined $self->{orphaned} && $self->{orphaned} == $column) {
-            my $v = $self->verticals($now, $next, exclude => $column);
-            $self->printerGraph($v);
-            $self->printerText('...');
-        }
-        if (defined $firstParent) {
-            delete $self->{orphaned};
-        } else {
-            $self->{orphaned} = $column;
-        }
-
-        if (defined $intermediate) {
-            my $v = $self->verticals($now, $intermediate, mark => $column);
-            my $d1 = $self->diagonals($now, $intermediate, current => $column, firstParent => $firstParent);
-            my $d2 = $self->diagonals($intermediate, $next, current => $next->{$commit}, firstParent => $firstParent);
-            $self->printerGraph($v);
-            $self->printerGraph($d1);
-            $self->printerGraph($d2);
-        } else {
-            my $v = $self->verticals($now, $next, mark => $column);
-            my $d1 = $self->diagonals($now, $next, current => $column, firstParent => $firstParent);
-            $self->printerGraph($v);
-            $self->printerGraph($d1);
-        }
-
-        delete $now->{$commit};
-        delete $next->{$commit};
-        # delete $now->{$firstParent};
-        # delete $next->{$firstParent};
-
-        %$now = %$next;
+        %$columns = %$state1;
     }
     sub commitLogLine {
         my ($self, $line) = @_;
         $self->printerText($line);
     }
     sub newColumn {
-        my ($self, $now, $next) = @_;
-        # print STDERR ("newColumn ", dumper($now), " ", dumper($next), "\n");
-        my @columns = (values(%$now), values(%$next));
-        # print STDERR ("          @columns\n");
+        my ($self, @states) = @_;
+        my @columns = grep { defined $_ } map { (values(%$_)) } @states;
+        # printf("# newColumn: %s\n", join(' ', @columns));
         my %columns = map { ($_ => 1) } @columns;
         for (my $i = 0; ; $i += 1) {
             if (!$columns{$i}) {
-                # print STDERR ("          returning $i\n");
                 return $i;
             }
         }
@@ -258,11 +227,13 @@ package My::Git::Graph {
     sub printerText {
         my ($self, $text) = @_;
         push(@{$self->{textLines}}, $text);
+        # printf("# text lines %d; graph lines %d\n", scalar(@{$self->{textLines}}), scalar(@{$self->{graphLines}}));
         $self->printerOut();
     }
     sub printerGraph {
         my ($self, $text) = @_;
         push(@{$self->{graphLines}}, $text);
+        # printf("# text lines %d; graph lines %d\n", scalar(@{$self->{textLines}}), scalar(@{$self->{graphLines}}));
         $self->printerOut();
     }
     sub printerOut {
@@ -280,13 +251,16 @@ package My::Git::Graph {
         my $g = $self->{graphLines};
         my $t = $self->{textLines};
         $self->printerOut();
-        while (scalar @$g) { # there will be no text lines at this point
+        while (scalar @$g || scalar @$t) {
             my $graphLine = shift(@$g);
-            $self->printerPrintLine($graphLine, '');
-        }
-        while (scalar @$t) { # there will be no graph lines at this point
             my $textLine = shift(@$t);
-            $self->printerPrintLine($self->{fillLine}, $textLine);
+            if (defined $graphLine && defined $textLine) {
+                $self->printerPrintLine($graphLine, $textLine);
+            } elsif (defined $graphLine) {
+                $self->printerPrintLine($graphLine, undef);
+            } elsif (defined $textLine) {
+                $self->printerPrintLine($self->{fillLine}, $textLine);
+            }
         }
     }
     sub printerPrintLine {
@@ -295,7 +269,10 @@ package My::Git::Graph {
         $graphLine //= '';
         $textLine //= '';
         $graphLine .= ' ' x $self->{minSpace};
-        $graphLine .= ' ' x ($self->{minCol} - $self->printedLength($graphLine));
+        my $len = $self->printedLength($graphLine);
+        if ($len < $self->{minCol}) {
+            $graphLine .= ' ' x ($self->{minCol} - $len);
+        }
         print($graphLine, $textLine, "\n");
     }
     sub printedLength {
@@ -303,78 +280,91 @@ package My::Git::Graph {
         $string =~ s{${RX_ESCAPE}}{}g;
         return length $string;
     }
-    sub verticals {
-        my ($self, $now, $next, %args) = @_;
+    sub verticalGraphLine {
+        my ($self, $maxCol, $A, $mark) = @_;
         my $colDiff = $self->{colDiff};
-        my $maxCol = max(values(%$now), values(%$next));
-        my @columns = values(%$now);
-        my %columns = map { ($_ => 1) } @columns;
-        delete $columns{$args{exclude}} if defined $args{exclude};
-        my $line = ' ' x ($colDiff * $maxCol + 1);
-        foreach my $column (keys %columns) {
-            substr($line, $colDiff * $column, 1) = '|';
+        my @col = grep { defined $_ } values(%$A);
+        return if !scalar @col;
+        my $line = ' ' x ($maxCol * $colDiff + 1);
+        foreach my $col (@col) {
+            substr($line, $col * $colDiff, 1) = '|';
         }
-        substr($line, $colDiff * $args{mark}, 1) = '*' if defined $args{mark};
-        $line =~ s{\*}{\e[1;33m$&\e[m}g;
+        if (defined $mark) {
+            substr($line, $mark * $colDiff, 1) = '*';
+        }
         return $line;
     }
-    sub diagonals {
-        my ($self, $now, $next, %args) = @_;
-        my $useLine2 = 0;
+    sub diagonalGraphLines {
+        my ($self, $maxCol, $columns, $state1, $commit, @parents) = @_;
+        # printf("# diagonalGraphLines commit %s\n", $commit);
+        # printf("# diagonalGraphLines parents %s\n", join(',', @parents));
+        if (!defined $commit && !scalar @parents) {
+            return ();
+        }
         my $colDiff = $self->{colDiff};
-        my $maxCol = max(values(%$now), values(%$next));
-        my $line1 = ' ' x ($colDiff * $maxCol + 1);
-        my $line2 = ' ' x ($colDiff * $maxCol + 1);
-        my @commits = grep { defined $next->{$_} } keys %$now;
-        my @vCommits = grep { $now->{$_} == $next->{$_} } @commits;
-        my @dCommits = grep { $now->{$_} != $next->{$_} } @commits;
-        return () if !scalar @dCommits;
-        my $firstParent = $args{firstParent};
-        die("unexpected") unless defined $firstParent;
-        my $line1col = $now->{$firstParent};
-        my $line2col = $next->{$firstParent};
-        my @dOrigins = map { $now->{$_} } @dCommits;
-        my %dOrigins = map { ($_ => 1) } @dOrigins;
-        die("unexpected") if scalar keys %dOrigins > 1;
-        my @verts = map { $next->{$_} } @vCommits;
-        my @diags = map { $next->{$_} } @dCommits;
-        my $currentColumn = $dOrigins[0];
-        my @left  = grep { $_ < $currentColumn } @diags;
-        my @right = grep { $_ > $currentColumn } @diags;
-        if (scalar @left) {
-            my $min = min(@left);
-            substr($line1, $currentColumn * $colDiff - 1, 1) = '/';
-            foreach my $left (@left) {
-                next if $left == $currentColumn - 1 && $colDiff < 3;
-                substr($line2, $left * $colDiff + 1, 1) = '/';
+        my $useLine1;
+        my $useLine2;
+
+        # initialize lines
+        my $line1 = ' ' x ($maxCol * $colDiff + 1);
+        my $line2 = ' ' x ($maxCol * $colDiff + 1);
+
+        my @parentColumns = map { $state1->{$_} } @parents;
+        my $thisColumn = $columns->{$commit};
+
+        my @leftColumns  = grep { $_ < $thisColumn } @parentColumns;
+        my @rightColumns = grep { $_ > $thisColumn } @parentColumns;
+
+        # draw leftward downward diagonals
+        if (scalar @leftColumns) {
+            $useLine1 = 1;
+            substr($line1, $thisColumn * $colDiff - 1, 1) = '/';
+            my $leftmostColumn = min @leftColumns;
+            foreach my $column (@leftColumns) {
+                next if $column == $thisColumn - 1 && $colDiff < 3;
                 $useLine2 = 1;
+                substr($line2, $column * $colDiff + 1, 1) = '/';
             }
-            my $pos1 = $min * $colDiff + 2;
-            my $pos2 = $currentColumn * $colDiff - 2;
-            if ($pos2 - $pos1 + 1 > 0) {
+            my $pos1 = $leftmostColumn * $colDiff + 2;
+            my $pos2 = $thisColumn * $colDiff - 2;
+            if ($pos1 <= $pos2) {
                 substr($line1, $pos1, $pos2 - $pos1 + 1) = '_' x ($pos2 - $pos1 + 1);
             }
         }
-        if (scalar @right) {
-            my $max = max(@right);
-            substr($line1, $currentColumn * $colDiff + 1, 1) = '\\';
-            foreach my $right (@right) {
-                next if $right == $currentColumn + 1 && $colDiff < 3;
-                substr($line2, $right * $colDiff - 1, 1) = '\\';
+
+        # draw rightward downward diagonals
+        if (scalar @rightColumns) {
+            $useLine1 = 1;
+            substr($line1, $thisColumn * $colDiff + 1, 1) = '\\';
+            my $rightmostColumn = max @rightColumns;
+            foreach my $column (@rightColumns) {
+                next if $column == $thisColumn + 1 && $colDiff < 3;
                 $useLine2 = 1;
+                substr($line2, $column * $colDiff - 1, 1) = '\\';
             }
-            my $pos1 = $currentColumn * $colDiff + 2;
-            my $pos2 = $max * $colDiff - 2;
-            if ($pos2 - $pos1 + 1 > 0) {
+            my $pos1 = $thisColumn * $colDiff + 2;
+            my $pos2 = $rightmostColumn * $colDiff - 2;
+            if ($pos1 <= $pos2) {
                 substr($line1, $pos1, $pos2 - $pos1 + 1) = '_' x ($pos2 - $pos1 + 1);
             }
         }
-        foreach my $col (@verts) {
-            substr($line1, $col * $colDiff, 1) = '|';
-            substr($line2, $col * $colDiff, 1) = '|';
+
+        # is one of the parents this column?
+        if (grep { $thisColumn == $_ } @parentColumns) {
+            substr($line1, $thisColumn * $colDiff, 1) = '|';
+            substr($line2, $thisColumn * $colDiff, 1) = '|';
         }
+
+        my @verticalCommits = grep { defined $columns->{$_} } keys %$state1;
+        my @verticalColumns = map { $columns->{$_} } @verticalCommits;
+        foreach my $column (@verticalColumns) {
+            substr($line1, $column * $colDiff, 1) = '|';
+            substr($line2, $column * $colDiff, 1) = '|';
+        }
+
         return ($line1, $line2) if $useLine2;
-        return ($line1);
+        return ($line1) if $useLine1;
+        return ();
     }
     sub eof {
         my ($self) = @_;
