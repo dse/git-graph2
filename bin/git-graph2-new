@@ -131,7 +131,6 @@ package My::Git::Graph {
         if (!defined $columns->{$commit}) {
             $columns->{$commit} = $self->newColumn($columns);
             $state1->{$commit} = $columns->{$commit};
-            # printf("# startCommit: commit %s assigned to column %d\n", $commit, $columns->{$commit});
         }
 
         if (!defined $firstParent) {
@@ -145,16 +144,12 @@ package My::Git::Graph {
             return;
         }
 
-        # print("# ", dumper($columns), "\n");
-
         if (!defined $state1->{$firstParent}) {
             $state1->{$firstParent} = $columns->{$commit};
-            # printf("# startCommit: first parent %s assigned to column %d\n", $firstParent, $state1->{$firstParent});
         }
         foreach my $otherParent (@otherParents) {
             if (!defined $state1->{$otherParent}) {
                 $state1->{$otherParent} = $self->newColumn($state1);
-                # printf("# startCommit: other parent %s assigned to column %d\n", $otherParent, $state1->{$otherParent});
             }
         }
         my $maxCol = max grep { defined $_ } (values(%$columns), values(%$state1));
@@ -174,7 +169,6 @@ package My::Git::Graph {
     sub newColumn {
         my ($self, @states) = @_;
         my @columns = grep { defined $_ } map { (values(%$_)) } @states;
-        # printf("# newColumn: %s\n", join(' ', @columns));
         my %columns = map { ($_ => 1) } @columns;
         for (my $i = 0; ; $i += 1) {
             if (!$columns{$i}) {
@@ -227,13 +221,11 @@ package My::Git::Graph {
     sub printerText {
         my ($self, $text) = @_;
         push(@{$self->{textLines}}, $text);
-        # printf("# text lines %d; graph lines %d\n", scalar(@{$self->{textLines}}), scalar(@{$self->{graphLines}}));
         $self->printerOut();
     }
     sub printerGraph {
         my ($self, $text) = @_;
         push(@{$self->{graphLines}}, $text);
-        # printf("# text lines %d; graph lines %d\n", scalar(@{$self->{textLines}}), scalar(@{$self->{graphLines}}));
         $self->printerOut();
     }
     sub printerOut {
@@ -296,14 +288,12 @@ package My::Git::Graph {
     }
     sub diagonalGraphLines {
         my ($self, $maxCol, $columns, $state1, $commit, @parents) = @_;
-        # printf("# diagonalGraphLines commit %s\n", $commit);
-        # printf("# diagonalGraphLines parents %s\n", join(',', @parents));
         if (!defined $commit && !scalar @parents) {
             return ();
         }
         my $colDiff = $self->{colDiff};
-        my $useLine1;
-        my $useLine2;
+        my $useLine1;           # true if there's any diagonal lines at all
+        my $useLine2;           # true if line2 is needed to render properly
 
         # initialize lines
         my $line1 = ' ' x ($maxCol * $colDiff + 1);
