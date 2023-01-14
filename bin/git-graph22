@@ -1,0 +1,262 @@
+#!/usr/bin/env perl
+use warnings;
+use strict;
+use open qw(:locale);
+our $PROGNAME = basename($0);
+
+use File::Basename qw(basename);
+use Getopt::Long;
+use Data::Dumper qw(Dumper);
+use Tie::IxHash;
+
+our %options;
+our @gitCmd = ('git', 'log', '--parents');
+
+Getopt::Long::Configure('gnu_compat', 'bundling', 'no_ignore_case');
+Getopt::Long::GetOptions(
+    'decorate:s'        => sub { push(@gitCmd, '--decorate=' . shift()); },
+    'no-decorate'       => sub { push(@gitCmd, '--no-decorate'); },
+    'date-order'        => sub { push(@gitCmd, '--date-order'); },
+    'author-date-order' => sub { push(@gitCmd, '--author-date-order'); },
+    'topo-order'        => sub { push(@gitCmd, '--topo-order'); },
+    'pretty:s'          => sub { push(@gitCmd, '--pretty=' . shift()); },
+    'format=s'          => sub { push(@gitCmd, '--format=' . shift()); },
+    'abbrev-commit'     => sub { push(@gitCmd, '--abbrev-commit'); },
+    'no-abbrev-commit'  => sub { push(@gitCmd, '--no-abbrev-commit'); },
+    'oneline'           => sub { push(@gitCmd, '--oneline'); },
+    'date:s'            => sub { push(@gitCmd, '--date=' . shift()); },
+    'parents'           => sub { $options{parents} = 1; },
+    'name-status'       => sub { push(@gitCmd, '--name-status'); },
+    'color:s'           => sub { push(@gitCmd, '--color=' . shift()); },
+    'no-color'          => sub { push(@gitCmd, '--no-color'); },
+    'abbrev:s'          => sub { push(@gitCmd, '--abbrev=' . shift()); },
+    'graph'             => sub { }, # no effect
+    'adog|goad'         => sub { push(@gitCmd, '--oneline', '--all', '--decorate'); },
+    'help'              => sub { usage(); exit(0); },
+) or die("Type '$0 --help' for help.\n");
+
+my $g = My::Git::Graph->new();
+
+my $ph;
+open($ph, '-|', @gitCmd) or die("unable to execute git log: $!\n");
+while (<$ph>) {
+    $g->parseLine($_);
+}
+
+package My::Git::Graph {
+    use List::Util qw(min);
+    sub new {
+        my ($class, %args) = @_;
+        my $self = bless(\%args, $class);
+        $self->{coldiff} //= 2;
+        $self->{priority} = {};
+        return $self;
+    }
+    sub parseLine {
+        my ($self, $line) = @_;
+        local $_ = $line;
+        s{\R\z}{};              # safer chomp
+        if (m{^
+              (?<esc1>\e[[0-9;]*m)?
+              (?<commitIds>[[:xdigit:]]+(?:\s+[[:xdigit:]]+)*)
+              (?<esc2>\e[[0-9;]*m)?}x) {
+            my $commitIds = $+{commitIds};
+            my @commitIds = split(/\s+/, $commitIds);
+            $self->startCommit($line, @commitIds);
+            next;
+        }
+        if (m{^
+              (?<esc1>\e[[0-9;]*m)?
+              (?<blah>commit\s+)
+              (?<commitIds>[[:xdigit:]]+(?:\s+[[:xdigit:]]+)*)
+              (?<esc2>\e[[0-9;]*m)?}x) {
+            my $commitIds = $+{commitIds};
+            my @commitIds = split(/\s+/, $commitIds);
+            $self->startCommit($line, @commitIds);
+            next;
+        }
+        $self->continueCommit($line);
+    }
+    sub startCommit {
+        my ($self, $line, $commit, $firstParent, @otherParents) = @_;
+        my $now  = $self->{now} //= {};
+        my $next = $self->{next} //= {};
+        if (!defined $now->{$commit}) {
+            $now->{$commit} = $self->newColumn($now, $next);
+            $next->{$commit} = $now->{$commit} if defined $firstParent;
+        }
+        my $intermediate;
+        if (defined $firstParent) {
+            if (!defined $now->{$firstParent}) {
+                $now->{$firstParent} = $now->{$commit};
+                $next->{$firstParent} = $now->{$commit};
+            } else {
+                my $winner = $self->priorityWinner($commit, $firstParent);
+                if (defined $winner) {
+                    $next->{$commit} = $winner;
+                    $next->{$firstParent} = $winner;
+                } else {
+                    my $col = min($now->{$commit}, $now->{$firstParent});
+                    $next->{$commit} = $col;
+                    $next->{$firstParent} = $col;
+                }
+                if ($next->{$commit} != $now->{$commit}) {
+                    $intermediate = { %$next };
+                    $intermediate->{$commit} = $now->{$commit};
+                } elsif ($next->{$firstParent} != $now->{$firstParent}) {
+                    $intermediate = { %$next };
+                    $intermediate->{$firstParent} = $now->{$firstParent};
+                }
+            }
+            foreach my $otherParent (@otherParents) {
+                if (defined $now->{$otherParent}) {
+                    $next->{$otherParent} = $now->{$otherParent};
+                } else {
+                    $now->{$otherParent} = $now->{$commit};
+                    $next->{$otherParent} = $self->newColumn($now, $next);
+                }
+                if (defined $intermediate) {
+                    $next->{$otherParent} = $intermediate->{$otherParent};
+                }
+            }
+        } else {
+            delete $next->{$commit};
+        }
+        if (defined $firstParent) {
+            $self->addPriorities($firstParent, @otherParents);
+            $self->replaceRelations($commit, $firstParent);
+        }
+    }
+    sub continueCommit {
+        my ($self, $line) = @_;
+    }
+    sub newColumn {
+        my ($self, $now, $next) = @_;
+    }
+
+    sub addPriorities {    # create an A-over-B for each B
+        my ($self, $a, @b) = @_;
+        my $pri = $self->{priority};
+        foreach my $b (@b) {
+            if (!$pri->{$b}->{$a}) {
+                $pri->{$a}->{$b} = 1;
+            }
+        }
+    }
+    sub replacePriorities {
+        my ($self, $old, $new) = @_;
+        my $pri = $self->{priority};
+
+        # replace OLD-over-B relationships with NEW-over-B ones
+        foreach my $b (keys %{$pri->{$old}}) {
+            next if $pri->{$b}->{$new};
+            next if $pri->{$new}->{$b};
+            $pri->{$new}->{$b} = 1 if $new ne $b;
+        }
+        delete $pri->{$old};
+
+        # replace A-over-OLD relationships with A-over-NEW ones
+        foreach my $a (keys %$pri) {
+            next if !$pri->{$a}->{$old};
+            delete $pri->{$a}->{$old};
+            next if $pri->{$new}->{$a};
+            next if $pri->{$a}->{$new};
+            $pri->{$a}->{$new} = 1 if $new ne $a;
+        }
+    }
+    sub priorityWinner {
+        my ($self, $x, $y) = @_;
+        my $pri = $self->{priority};
+        return $x if $pri->{$x}->{$y};
+        return $y if $pri->{$y}->{$x};
+        return;
+    }
+    sub printerGraph {
+        my ($self, @lines) = @_;
+        push(@{$self->{graph}}, @lines);
+    }
+    sub printerText {
+        my ($self, @lines) = @_;
+        push(@{$self->{text}}, @lines);
+    }
+    sub printerFill {
+        my ($self, $fill) = @_;
+        $self->{fill} = $fill;
+    }
+    sub verticals {
+        my ($self, $now, $next, %args) = @_;
+        my $maxcol = max(values(%$now), values(%$next));
+        my @columns = values(%$now);
+        my %columns = map { ($_ => 1) } @columns;
+        delete $columns{$args{exclude}} if defined $args{exclude};
+        my $line = ' ' x ($self->{coldiff} * $maxcol + 1);
+        foreach my $column (keys %columns) {
+            substr($line, $self->{coldiff} * $column, 1) = '|';
+        }
+        substr($line, $self->{coldiff} * $args{mark}, 1) = '*';
+        return $line;
+    }
+    sub diagonals {
+        my ($self, $now, $next, %args) = @_;
+        my $useline2 = 0;
+        my $coldiff = $self->{coldiff};
+        my $maxcol = max(values(%$now), values(%$next));
+        my $line1 = ' ' x ($coldiff * $maxcol + 1);
+        my $line2 = ' ' x ($coldiff * $maxcol + 1);
+        my @commits = grep { defined $next->{$_} } $now->keys;
+        my @verticalcommits = grep { $now->{$_} == $next->{$_} } @commits;
+        my @diagonalcommits = grep { $now->{$_} != $next->{$_} } @commits;
+        if (!scalar @diagonalcommits) {
+            return;
+        }
+        my $firstParent = $args{firstParent};
+        my $line1column = $now->{$firstParent};
+        my $line2column = $next->{$firstParent};
+        my @diagonalorigins = map { $now->{$_} } @diagonalcommits;
+        my %diagonalorigins = map { ($_ => 1) } @diagonalorigins;
+        die("unexpected") if (scalar keys %diagonalorigins > 1);
+        my @verticals = map { $now->{$_} } @verticalcommits;
+        my @diagonals = map { $next->{$_} } @diagonalcommits;
+        my $currentcolumn = $diagonalorigins[0];
+        my @left  = grep { $_ < $currentcolumn } @diagonals;
+        my @right = grep { $_ > $currentcolumn } @diagonals;
+        if (scalar @left) {
+            my $min = min(@left);
+            substr($line1, $currentcolumn * $coldiff - 1, 1) = '/';
+            foreach my $left (@left) {
+                if (!($left == $currentcolumn - 1 && $coldiff < 3)) {
+                    substr($line2, $left * $coldiff + 1, 1) = '/';
+                    $useline2 = 1;
+                }
+            }
+            my $pos1 = $min * $coldiff + 2;
+            my $pos2 = $currentcolumn * $coldiff - 2;
+            if ($pos2 - $pos1 + 1 > 0) {
+                substr($line1, $pos1, $pos2 - $pos1 + 1) = '_' x ($pos2 - $pos1 + 1);
+            }
+        }
+        if (scalar @right) {
+            my $max = max(@right);
+            substr($line1, $currentcolumn * $coldiff + 1, 1) = '\\';
+            foreach my $right (@right) {
+                if (!($right == $currentcolumn + 1 && $coldiff < 3)) {
+                    substr($line2, $right * $coldiff - 1, 1) = '\\';
+                    $useline2 = 1;
+                }
+            }
+            my $pos1 = $currentcolumn * $coldiff + 2;
+            my $pos2 = $max * $coldiff - 2;
+            if ($pos2 - $pos1 + 1 > 0) {
+                substr($line1, $pos1, $pos2 - $pos1 + 1) = '_' x ($pos2 - $pos1 + 1);
+            }
+        }
+        foreach my $col (@verticals) {
+            substr($line1, $col * $coldiff, 1) = '|';
+            substr($line2, $col * $coldiff, 1) = '|';
+        }
+        if ($useline2) {
+            return ($line1, $line2);
+        }
+        return ($line1);
+    }
+}
